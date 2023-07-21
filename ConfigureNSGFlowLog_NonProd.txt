@@ -1,0 +1,60 @@
+try {
+    Write-Host -ForegroundColor Blue "Checking if already logged in!"
+    (Get-AzContext).Account.ID | Out-Null
+    Write-Host -ForegroundColor Blue "Already logged in, continuing..."
+} catch {
+    Write-Host -ForegroundColor Blue "Not logged in, please login..."
+    Login-AzAccount
+}
+
+#Get East 2 Storage Account
+Set-AzContext -SubscriptionName "CVS-SECUREHUB000"
+$stor_EUS2 = Get-AzStorageAccount -ResourceGroupName 'RG-cvsnsgflhub000' -AccountName 'sacvsnsgflhub000' 
+
+#Get Central US Storage Account
+Set-AzContext -SubscriptionName "CVS-SECUREHUB001"
+$stor_CUS = Get-AzStorageAccount -ResourceGroupName 'RG-cvsnsgflhub000' -AccountName 'sacvsnsgflhubusc000'
+
+#$rmSubs = @('SUB-HCB-ACN-PROD', 
+#             'PBM ACN Production', 
+#             'SUB-CORP-ACN-PROD',
+#             'PBM ACN PCI Production', 
+#             'SUB-CORP-WIZARD', 
+#             'SUB-PBM-ACN-PROD', 
+#             'Retail ACN Production')
+
+$rmSubs = @('PBM ACN Non-Production', 
+             'SUB-HCB-ACN-NONPROD', 
+             'SUB-CORP-ACN-NONPROD', 
+             'SUB-PBM-ACN-NONPROD',  
+             'Retail ACN Non-Production')
+
+foreach ($sub in $rmSubs) { 
+
+    if (((Get-AzContext).Subscription).Name -ne $sub) { Select-AzSubscription -SubscriptionName $sub }
+    
+    $nw_cus = Get-AzNetworkWatcher -ResourceGroupName NetworkWatcherRg -Name NetworkWatcher_centralus -EA SilentlyContinue
+    $nw_eus2 = Get-AzNetworkWatcher -ResourceGroupName NetworkWatcherRg -Name NetworkWatcher_eastus2 -EA SilentlyContinue
+    $nsgs_cus = Get-AzNetworkSecurityGroup | Where-Object {$_.Location -eq "centralus"}
+    $nsgs_eus2 = Get-AzNetworkSecurityGroup | Where-Object {$_.Location -eq "eastus2"}
+    
+    #set flowlog for CentralUS NSGs
+    Write-Host -ForegroundColor Blue "Setting NSG Flow Logs for Central US in $($sub)"
+    foreach($nsg in $nsgs_cus){
+        Write-Host -ForegroundColor Green "Setting NSG Flow Logs for $($nsg.Name) in $($sub)"
+        Set-AzNetworkWatcherConfigFlowLog -NetworkWatcher $nw_cus -TargetResourceId $nsg.Id -StorageAccountId $stor_CUS.Id -EnableFlowLog $true -FormatType Json -FormatVersion 2 -EnableRetention $true -RetentionInDays 120 -EA SilentlyContinue | Out-Null 
+    }
+    
+    #set flowlogs for EastUS2 NSGs
+    Write-Host -ForegroundColor Blue "Setting NSG Flow Logs for East US 2 NSGs in $($sub)"
+    foreach($nsg in $nsgs_eus2){
+        Write-Host -ForegroundColor Green "Setting NSG Flow Logs for $($nsg.Name) in $($sub)"    
+        Set-AzNetworkWatcherConfigFlowLog -NetworkWatcher $nw_eus2 -TargetResourceId $nsg.Id -StorageAccountId $stor_EUS2.Id -EnableFlowLog $true -FormatType Json -FormatVersion 2 -EnableRetention $true -RetentionInDays 120 -EA SilentlyContinue | Out-Null           
+    }
+Write-Host -ForegroundColor Blue "Completed setting NSG Flow Logs in Subscription $($sub)" 
+}
+
+$fileName = "NSGFlowLogStatus_{0}.csv" -f (Get-Date -UFormat "%m%d")
+$output | Export-Csv -Path $([IO.Path]::Combine($BaseDir, $fileName)) -NoTypeInformation
+
+Write-Host -ForegroundColor Blue "***End of Script Run***"
